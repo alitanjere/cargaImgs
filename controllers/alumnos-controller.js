@@ -3,7 +3,7 @@ import { StatusCodes } from 'http-status-codes';
 import AlumnosService from './../services/alumnos-service.js';
 
 import multer from 'multer';
-import fs from 'fs/promises';
+import fs from 'fs';
 import path from 'path';
 
 const router = Router();
@@ -59,11 +59,22 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// =========================
-//   Multer en memoria
-// =========================
+// ---------- Multer con almacenamiento en disco ----------
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const id = req.params.id;
+    const dir = path.join(process.cwd(), 'uploads', 'alumnos', id);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname) || '.jpg';
+    cb(null, 'photo' + ext);
+  }
+});
+
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage,
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (!file.mimetype?.startsWith('image/')) {
@@ -72,42 +83,6 @@ const upload = multer({
     cb(null, true);
   }
 });
-
-function sanitizeFilename(name = '') {
-  const base = path.basename(name);
-  return base.replace(/[^a-zA-Z0-9._-]/g, '_');
-}
-
-function getExtFrom(file) {
-  const extFromName = path.extname(file?.originalname || '').toLowerCase();
-  if (extFromName) return extFromName;
-  const map = {
-    'image/jpeg': '.jpg',
-    'image/png': '.png',
-    'image/webp': '.webp',
-    'image/gif': '.gif',
-    'image/heic': '.heic',
-    'image/heif': '.heif'
-  };
-  return map[file?.mimetype] || '.jpg';
-}
-
-const ID_PAD_WIDTH = 6;
-function padId(id, width = ID_PAD_WIDTH) {
-  const num = Number(id);
-  return Number.isInteger(num) && num >= 0 ? String(num).padStart(width, '0') : String(id).padStart(width, '0');
-}
-
-function nowTimestamp(d = new Date()) {
-  const yyyy = d.getFullYear();
-  const MM = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const HH = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  const SSS = String(d.getMilliseconds()).padStart(3, '0');
-  return `${yyyy}${MM}${dd}${HH}${mm}${ss}${SSS}`;
-}
 
 router.post('/:id/photo', upload.single('image'), async (req, res) => {
   const id = req.params.id;
@@ -121,29 +96,17 @@ router.post('/:id/photo', upload.single('image'), async (req, res) => {
       return res.status(StatusCodes.BAD_REQUEST).send('No se recibió el archivo. Usa el campo "image".');
     }
 
-    const ext = getExtFrom(req.file);
-    const original = sanitizeFilename(req.file.originalname || `photo${ext}`);
-    const paddedId = padId(id);
-    const timestamp = nowTimestamp();
-    const uniqueName = `${paddedId}-${timestamp}-${original}`;
-
-    const dir = path.join(process.cwd(), 'uploads', 'alumnos');
-    const finalPath = path.join(dir, uniqueName);
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(finalPath, req.file.buffer);
-
-    const publicUrl = `/static/alumnos/${uniqueName}`;
+    const publicUrl = `/static/alumnos/${id}/${req.file.filename}`;
     alumno.imagen = publicUrl;
 
     const rowsAffected = await currentService.updateAsync(alumno);
     if (rowsAffected && rowsAffected !== 0) {
       return res.status(StatusCodes.CREATED).json({
         id,
-        filename: uniqueName,
+        filename: req.file.filename,
         url: publicUrl
       });
     } else {
-      await fs.rm(finalPath, { force: true });
       return res.status(StatusCodes.NOT_FOUND).send(`No se pudo actualizar el alumno (id:${id}).`);
     }
   } catch (err) {
